@@ -10,8 +10,7 @@ if faces_dir.exists():
 faces_dir.mkdir()
 
 doc = App.newDocument('doc')
-# Import.insert('step_files/07-47916/47916.STEP', 'doc')
-Import.insert('step_files/DC19-93640/Assem1.STEP', 'doc')
+Import.insert('dazuiniao.stp', 'doc')
 
 
 for o in doc.Objects:
