@@ -97,7 +97,6 @@ def _make_surf(name, num_u_poles, num_v_poles, poles_coords):
 
 def import_cad():
     F.delete_default_objects()
-
     with open('pyocc/_nurbs_surfaces.json') as f:
         nurbs_surfaces = json.load(f)
 
