@@ -1,5 +1,8 @@
 *
-occt/.idea
 !*/
+!**/CMakeLists.txt
 !**/*.py
+!**/*.cpp
 !.gitignore
+
+**/build
