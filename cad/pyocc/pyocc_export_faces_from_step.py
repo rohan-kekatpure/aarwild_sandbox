@@ -2,21 +2,29 @@ import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Tuple, Set
+from typing import List, Dict, Any, Optional, Tuple, NewType
 
 import OCC.Core.GeomAbs as G
 import numpy as np
-from OCC.Core.BRep import BRep_Tool, BRep_Tool_Curve
+from OCC.Core.BRep import BRep_Tool, BRep_Tool_Curve, BRep_Builder
 from OCC.Core.BRepAdaptor import BRepAdaptor_Surface
-from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_NurbsConvert
+from OCC.Core.BRepBuilderAPI import (BRepBuilderAPI_NurbsConvert,
+                                     BRepBuilderAPI_MakeEdge,
+                                     BRepBuilderAPI_MakeFace,
+                                     BRepBuilderAPI_MakeWire)
 from OCC.Core.BRepTools import breptools_OuterWire
 from OCC.Core.GeomConvert import GeomConvert_CompCurveToBSplineCurve, geomconvert_CurveToBSplineCurve
 from OCC.Core.IFSelect import IFSelect_RetDone, IFSelect_ItemsByEntity
 from OCC.Core.STEPControl import STEPControl_Reader
 from OCC.Core.TopoDS import topods_Face, TopoDS_Wire, topods_Edge
 from OCC.Core.gp import gp_Pnt, gp_Vec
-from OCC.Extend.TopologyUtils import TopologyExplorer
+from OCC.Extend.TopologyUtils import TopologyExplorer, WireExplorer
 from OCC.Core.GeomAPI import GeomAPI_ProjectPointOnCurve
+from OCC.Core.TopAbs import TopAbs_Orientation
+from OCC.Core.BOPTools import BOPTools_AlgoTools2D_BuildPCurveForEdgeOnFace
+from OCC.Core.TopTools import TopTools_ListOfShape
+
+NURBSObject = NewType('NURBSObject', Any)
 
 @dataclass
 class NurbsParams:
@@ -35,6 +43,7 @@ class NurbsParams:
 
 @dataclass
 class Mesh:
+    name: str
     type_: str
     edges: List[List]
     faces: List[Tuple]
@@ -44,6 +53,7 @@ class Mesh:
 
     def to_dict(self) -> Dict:
         return {
+            'name': self.name,
             'type': self.type_,
             'vertices': self.vertices,
             'edges': self.edges,
@@ -52,7 +62,7 @@ class Mesh:
             'param_grid': self.param_grid
         }
 
-def _get_2d_spline_params(spline) -> Optional[NurbsParams]:
+def _get_2d_spline_params(spline: NURBSObject) -> Optional[NurbsParams]:
     NU = spline.NbUPoles()
     NV = spline.NbVPoles()
     DU = spline.UDegree()
@@ -75,7 +85,7 @@ def _get_2d_spline_params(spline) -> Optional[NurbsParams]:
     nurbs_params = NurbsParams(NU, NV, DU, DV, poles_coords)
     return nurbs_params
 
-def _get_1d_spline_params(spline) -> Optional[NurbsParams]:
+def _get_1d_spline_params(spline: NURBSObject) -> Optional[NurbsParams]:
     pass
 
 def _convert_to_nurbs(face: Any) -> Any:
@@ -100,7 +110,7 @@ def _compute_faces_from_verts(NU, NV) -> List:
 def _compute_edges_from_verts(NU):
     return [[i, i + 1] for i in range(NU - 1)]
 
-def _compute_mesh_from_spline_surface(spline) -> Mesh:
+def _compute_mesh_from_spline_surface(name: str, spline: NURBSObject) -> Mesh:
     U1, U2, V1, V2 = spline.Bounds()
     tol = 10.
     URES, VRES = spline.Resolution(tol)
@@ -119,9 +129,10 @@ def _compute_mesh_from_spline_surface(spline) -> Mesh:
         XYZgrid[i, :] = point.Coord()
     verts = [tuple(row) for row in XYZgrid]
     faces = _compute_faces_from_verts(NU, NV)
-    return Mesh(type_='surface', vertices=verts, edges=[], faces=faces, param_grid=UVgrid.tolist())
+    return Mesh(name=name, type_='surface', vertices=verts,
+                edges=[], faces=faces, param_grid=UVgrid.tolist())
 
-def _compute_mesh_from_spline_curve(spline) -> Mesh:
+def _compute_mesh_from_spline_curve(name: str, spline: NURBSObject) -> Mesh:
     U1, U2 = spline.FirstParameter(), spline.LastParameter()
     tol = 10.
     URES = spline.Resolution(tol)
@@ -137,9 +148,10 @@ def _compute_mesh_from_spline_curve(spline) -> Mesh:
     verts = np.column_stack((Xgrid, Ygrid, Zgrid))
     verts = verts.tolist()
     edges = _compute_edges_from_verts(NU)
-    return Mesh(type_='curve', vertices=verts, edges=edges, faces=[], param_grid=Ugrid.tolist())
+    return Mesh(name=name, type_='curve', vertices=verts,
+                edges=edges, faces=[], param_grid=Ugrid.tolist())
 
-def _bspline_curve_from_wire(wire):
+def _bspline_curve_from_wire(wire: NURBSObject) -> NURBSObject:
     """
     Private method that takes a TopoDS_Wire and transforms it into a
     Bspline_Curve.
@@ -152,8 +164,9 @@ def _bspline_curve_from_wire(wire):
     composite_curve_builder = GeomConvert_CompCurveToBSplineCurve()
 
     # iterator to edges in the TopoDS_Wire
-    edge_explorer = TopologyExplorer(wire, ignore_orientation=True)
-    edges = list(edge_explorer.edges())
+    # edge_explorer = TopologyExplorer(wire, ignore_orientation=False)
+    edge_explorer = WireExplorer(wire)
+    edges = list(edge_explorer.ordered_edges())
     for edge in edges:
         # edge can be joined only if it is not degenerated (zero length)
         if BRep_Tool.Degenerated(edge):
@@ -178,7 +191,8 @@ def _bspline_curve_from_wire(wire):
     comp_curve = composite_curve_builder.BSplineCurve()
     return comp_curve
 
-def _wire_trim(surface_spline: Any, surface_mesh: Mesh, curve_spline: Any) -> Mesh:
+def _partition_verts_by_wire(surface_spline: NURBSObject, surface_mesh: Mesh,
+                             curve_spline: NURBSObject, kind: str) -> np.ndarray:
     M = surface_mesh
     verts = M.vertices
     uvs = M.param_grid
@@ -211,10 +225,37 @@ def _wire_trim(surface_spline: Any, surface_mesh: Mesh, curve_spline: Any) -> Me
 
         # Now compute the angle between surface normal and cx
         cos = np.dot(normal_s, cx)
-        is_interior_vert[i] = (cos > 0)
+        if (kind == 'outer') and (cos > 0):
+            is_interior_vert[i] = True
+        elif (kind == 'inner') and (cos < 0):
+            is_interior_vert[i] = True
+
+    return is_interior_vert
+
+def _trim(surface_spline: NURBSObject, surface_mesh: Mesh,
+          inner_wire_splines: List, outer_wire_splines: List) -> np.ndarray:
+    M = surface_mesh
+    n_verts = len(M.vertices)
+    is_interior_vert = np.ones((n_verts, ), dtype=np.bool)
+
+    # Trim using outer wires; outer then inner
+    for spline in outer_wire_splines:
+        interior_verts_for_wire = _partition_verts_by_wire(surface_spline, M, spline, kind='outer')
+        is_interior_vert = np.logical_and(is_interior_vert, interior_verts_for_wire)
+
+    # Trim using inner wires
+    for spline in inner_wire_splines:
+        interior_verts_for_wire = _partition_verts_by_wire(surface_spline, M, spline, kind='inner')
+        is_interior_vert = np.logical_and(is_interior_vert, interior_verts_for_wire)
+
+    return is_interior_vert
+
+def _recompute_mesh(name: str, old_mesh: Mesh, is_interior_vert: np.ndarray) -> Mesh:
+    M = old_mesh
+    n_verts = len(old_mesh.vertices)
+    n_faces = len(M.faces)
 
     # Partition faces into interior and exterior
-    n_faces = len(M.faces)
     is_interior_face = np.zeros((n_faces,), dtype=bool)
     for i, face in enumerate(M.faces):
         if all(is_interior_vert[np.array(face)]):
@@ -226,7 +267,8 @@ def _wire_trim(surface_spline: Any, surface_mesh: Mesh, curve_spline: Any) -> Me
     interior_faces = np.array(M.faces)[is_interior_face]
     new_verts = np.array(M.vertices)[is_interior_vert]
     new_faces = [(VM[i1], VM[i2], VM[i3], VM[i4]) for i1, i2, i3, i4 in interior_faces]
-    new_mesh = Mesh(type_='surface', vertices=new_verts.tolist(), edges=[], faces=new_faces, param_grid=None)
+    new_mesh = Mesh(name=name, type_='surface', vertices=new_verts.tolist(),
+                    edges=[], faces=new_faces, param_grid=None)
     return new_mesh
 
 
@@ -267,7 +309,7 @@ def main():
         surface_spline = surface.BSpline()
 
         # Compute mesh from NURBS params
-        surface_mesh = _compute_mesh_from_spline_surface(surface_spline)
+        surface_mesh = _compute_mesh_from_spline_surface(face_id, surface_spline)
 
         # Export raw parameters
         nurbs_params = _get_2d_spline_params(surface_spline)
@@ -278,18 +320,18 @@ def main():
         wires = list(face_explorer.wires())
         inner_wire_splines = []
         outer_wire_splines = []
+
         for wire in wires:
             wire_spline = _bspline_curve_from_wire(wire)
             if wire == breptools_OuterWire(face):
                 outer_wire_splines.append(wire_spline)
             else:
-                inner_wire_splines.append(wire_spline)
-
-            wire_mesh = _compute_mesh_from_spline_curve(wire_spline)
+                inner_wire_splines.append(wire_spline.Reversed())
+            wire_mesh = _compute_mesh_from_spline_curve(face_id, wire_spline)
             meshes_list.append(wire_mesh.to_dict())
 
-        new_surface_mesh = _wire_trim(surface_spline, surface_mesh, outer_wire_splines[0])
-        meshes_list.append(surface_mesh.to_dict())
+        is_interior_vert = _trim(surface_spline, surface_mesh, inner_wire_splines, outer_wire_splines)
+        new_surface_mesh = _recompute_mesh(face_id, surface_mesh, is_interior_vert)
         meshes_list.append(new_surface_mesh.to_dict())
 
     # Write meshes to disk
