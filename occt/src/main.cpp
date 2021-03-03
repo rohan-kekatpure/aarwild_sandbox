@@ -1,5 +1,6 @@
 #include<cstdio>
 #include<string>
+#include<stdexcept>
 #include<STEPControl_Reader.hxx>
 #include<TopExp_Explorer.hxx>
 #include<TopoDS.hxx>
@@ -15,11 +16,13 @@
 #include<Geom_Curve.hxx>
 #include<Standard_Handle.hxx>
 #include<GeomConvert.hxx>
-#include <TopoDS_Wire.hxx>
+#include<TopoDS_Wire.hxx>
 #include<gp_XY.hxx>
-#include <ShapeConstruct_ProjectCurveOnSurface.hxx>
-#include <GeomConvert_CompCurveToBSplineCurve.hxx>
-#include <BRepTools_WireExplorer.hxx>
+#include<ShapeConstruct_ProjectCurveOnSurface.hxx>
+#include<GeomConvert_CompCurveToBSplineCurve.hxx>
+#include<BRepTools_WireExplorer.hxx>
+#include<BRepBuilderAPI_MakeWire.hxx>
+#include<boost/program_options.hpp>
 
 using namespace std;
 
@@ -74,15 +77,52 @@ Handle(Geom_BSplineCurve) computeCompositeCurveFromWire(const TopoDS_Wire& wire)
     return compositeBSplineCurve;
 }
 
-int main(){
+/*
+ * Parse commandline options
+ */
+bool processArgs(int argc, const char *argv[], string& stepFilePath){
+    namespace po = boost::program_options;
+
+    try {
+        po::options_description desc("Program Usage");
+        desc.add_options()
+                ("help,h", "help message")
+                ("stepfile-path", po::value<string>(&stepFilePath)->required(),"Step file path");
+
+        po::variables_map vm;
+        po::store(po::parse_command_line(argc, argv, desc), vm);
+
+        if (vm.count("help")) {
+            std::cout << desc << endl;
+            return false;
+        }
+
+        po::notify(vm);
+    } catch(const po::error &e) {
+        printf("Error: %s\n", e.what());
+        return false;
+    }
+    return true;
+}
+
+int main(int argc, const char *argv[]){
+
+    // Process commandline arguments
+    string stepFilePath;
+    bool parseResult = processArgs(argc, argv, stepFilePath);
+    if (!parseResult){
+        printf("Error parsing commandline options\n");
+        return 1;
+    }
+
+    // Read STEP file
     STEPControl_Reader reader;
-    Standard_CString fileName = "/Users/rohan/work/code/aarwild_sandbox/cad/step_files/dazuiniao/dazuiniao.stp";
-    IFSelect_ReturnStatus status = reader.ReadFile(fileName);
+    IFSelect_ReturnStatus status = reader.ReadFile(stepFilePath.c_str());
     
     if (status != IFSelect_RetDone){
-        throw runtime_error("Error import STEP");
-    }
-    else {
+        printf("Error importing STEP file %s\n", stepFilePath.c_str());
+        return 1;
+    } else {
         printf("STEP import succeeded\n");
     }
     
@@ -102,9 +142,6 @@ int main(){
     // Get surface bspline
     const TopoDS_Face &face = TopoDS::Face(shapeEx.Current());
     Handle(Geom_BSplineSurface) bSplineSurface = getBSplineSurfaceFromFace(face);
-    double u1, u2, v1, v2;
-    bSplineSurface->Bounds(u1, u2, v1, v2);
-    printf("Bounds: u1 = %f, u2 = %f, v1 = %f, v2 = %f\n", u1, u2, v1, v2);
 
     // Get list of wires
     TopExp_Explorer faceEx = TopExp_Explorer(face, TopAbs_WIRE);
@@ -114,8 +151,7 @@ int main(){
         if (BRepTools::OuterWire(face) == wire){
             printf("\t outer wire\n");
             break;
-        }
-        else {
+        } else {
             printf("\t inner wire\n");
         }
         faceEx.Next();
@@ -131,7 +167,7 @@ int main(){
         gp_XY pt = curve->Value(t1).Coord();
         printf("curve_value = (%f, %f)\n", pt.Coord(1), pt.Coord(2));
         break;
-        // wireex.Next();
+        wireex.Next();
     }
     // Make composite edge out of the outer wire
     Handle(Geom_Curve) compositeCurve = computeCompositeCurveFromWire(wire);
@@ -149,27 +185,29 @@ int main(){
 
     // Make new edge with the composite curve
     BRepBuilderAPI_MakeEdge edgeMaker = BRepBuilderAPI_MakeEdge(compositeCurve);
-    TopoDS_Edge newEdge = edgeMaker.Edge();
+    const TopoDS_Edge newEdge = edgeMaker.Edge();
 
     // Make new wire from Edge
-    /*
-     *
-     */
+    BRepBuilderAPI_MakeWire wireMaker = BRepBuilderAPI_MakeWire(newEdge);
+    const TopoDS_Wire newWire = wireMaker.Wire();
 
     // Make new face from BSpline of original face and the wire
     BRepBuilderAPI_MakeFace faceMaker = BRepBuilderAPI_MakeFace(bSplineSurface, wire);
-    TopoDS_Face newFace = faceMaker.Face();
+    const TopoDS_Face newFace = faceMaker.Face();
+
+    // Update newEdge with pCurve information
     BRep_Builder bRepBuilder = BRep_Builder();
-    bRepBuilder.UpdateEdge(edge, pCurve, newFace, 1.0e-4);
-//
-//    Handle(Geom2d_Curve) newCurve = BRep_Tool::CurveOnSurface(edge, newFace, firstParam, lastParam);
-//    if (!newCurve){
-//        printf("could not return curve\n");
-//        return 1;
-//    }
-//
-//    gp_XY pt = newCurve->Value(firstParam).Coord();
-//    printf("curve_value = (%f, %f)\n", pt.Coord(1), pt.Coord(2));
+    bRepBuilder.UpdateEdge(newEdge, pCurve, newFace, 1.0e-4);
+
+    Handle(Geom2d_Curve) newCurve = BRep_Tool::CurveOnSurface(newEdge, newFace, firstParam, lastParam);
+    if (!newCurve){
+        throw runtime_error("Could not compute pCurve");
+    }
+
+    
+    // Query the new pCurve
+    gp_XY pt = newCurve->Value(firstParam).Coord();
+    printf("curve_value = (%f, %f)\n", pt.Coord(1), pt.Coord(2));
 
     return 0;
 }

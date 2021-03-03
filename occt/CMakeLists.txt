@@ -40,6 +40,12 @@ if(${GP_PNT_HEADER_LOCATION} STREQUAL "GP_PNT_HEADER_LOCATION-NOTFOUND")
     message(FATAL_ERROR "gp_Pnt.hxx not be found.")
 endif()
 
+find_package(Boost REQUIRED COMPONENTS program_options)
+if(Boost_FOUND)
+  message(STATUS "Boost version found: " ${Boost_MAJOR_VERSION} "." ${Boost_MINOR_VERSION})
+  include_directories(${Boost_INCLUDE_DIRS})
+  target_link_libraries(${PROJECT_NAME} ${Boost_LIBRARIES})
+endif(Boost_FOUND)
 
 target_link_libraries(${PROJECT_NAME} TKernel TKMath TKBRep TKG2d TKG3d TKGeomBase TKBO
                         TKBool TKFeat TKFillet TKGeomAlgo TKHLR TKMesh TKOffset
