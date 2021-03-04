@@ -1,5 +1,5 @@
 #include<cstdio>
-#include<string>
+#include<iostream>
 #include<stdexcept>
 #include<STEPControl_Reader.hxx>
 #include<TopExp_Explorer.hxx>
@@ -23,16 +23,10 @@
 #include<BRepTools_WireExplorer.hxx>
 #include<BRepBuilderAPI_MakeWire.hxx>
 #include<boost/program_options.hpp>
+#include<boost/json.hpp>
 
 using namespace std;
-
-/*
- def _get_composite_edge_from_wire(wire: Any) -> Any:
-    wire = topods_Wire(wire)
-    composite_curve = _bspline_curve_from_wire(wire)
-    composite_edge = BRepBuilderAPI_MakeEdge(composite_curve).Edge()
-    return composite_edge
-*/
+namespace json = boost::json;
 
 /*
  * Returns the geometric surface of a face in BSpline format. The surface is first extracted
@@ -46,7 +40,6 @@ Handle(Geom_BSplineSurface) getBSplineSurfaceFromFace(const TopoDS_Face& face){
     Handle(Geom_BSplineSurface) bsplineSurface = GeomConvert::SurfaceToBSplineSurface(surface);
     return bsplineSurface;
 }
-
 /*
  * Combines all curves from all edges of a wire into a single BSpline curve. The constituent curves
  * may be of various types. They are all first converted to NURBS curve type before being converted
@@ -103,6 +96,63 @@ bool processArgs(int argc, const char *argv[], string& stepFilePath){
         return false;
     }
     return true;
+}
+
+map<string, vector<double>> dumpWireToJson(const TopoDS_Wire& wire, const TopoDS_Face& face){
+    TopExp_Explorer wireex = TopExp_Explorer(wire, TopAbs_EDGE);
+    const int numPoints = 256;
+    vector<double> U(numPoints), V(numPoints);
+    while (wireex.More()){
+        TopoDS_Edge edge = TopoDS::Edge(wireex.Current());
+        double firstParam, lastParam;
+        Handle(Geom2d_Curve) curve = BRep_Tool::CurveOnSurface(edge, face, firstParam, lastParam);
+        if (!curve){
+            printf("Could not get pCurve\n");
+            return {};  //TODO: Throw exception here
+        }
+        double param = firstParam;
+        double incr = (lastParam - firstParam) / numPoints;
+        for (int i = 0; i < numPoints; i++){
+            gp_XY xy = curve->Value(param).Coord();
+            U[i] = xy.Coord(1);
+            V[i] = xy.Coord(2);
+            param += incr;
+        }
+        break; // TODO: Better way to ensure that wire has only 1 edge
+    }
+
+    map<string, vector<double>> ret{ {"U", U}, {"V", V}};
+    return ret;
+}
+
+json::object dumpFaceToJson(const TopoDS_Face& face) {
+    Handle(Geom_Surface) bSplineSurface = BRep_Tool::Surface(face);
+    double u1, u2, v1, v2;
+    bSplineSurface->Bounds(u1, u2, v1, v2);
+
+    // Explore Face
+    TopExp_Explorer faceEx = TopExp_Explorer(face, TopAbs_WIRE);
+    vector<map<string, vector<double>>> innerWires;
+    map<string, vector<double>> outerWire = {};
+    while (faceEx.More()) {
+        TopoDS_Wire wire = TopoDS::Wire(faceEx.Current());
+        map<string, vector<double>> wm = dumpWireToJson(wire, face);
+        if (BRepTools::OuterWire(face) == wire) {
+            outerWire = wm;
+        } else {
+            innerWires.push_back(wm);
+        }
+
+        break;  // TODO: Better way to ensure that face has only 1 wire
+    }
+    json::object obj;
+    obj["FACE"] = {
+            {"surface_bounds", {{"u1", u1}, {"u2", u2}, {"v1", v1}, {"v2", v2}}},
+            {"inner_pcurves", innerWires},
+            {"outer_pcurve", outerWire}
+    };
+
+    return obj;
 }
 
 int main(int argc, const char *argv[]){
@@ -192,22 +242,19 @@ int main(int argc, const char *argv[]){
     const TopoDS_Wire newWire = wireMaker.Wire();
 
     // Make new face from BSpline of original face and the wire
-    BRepBuilderAPI_MakeFace faceMaker = BRepBuilderAPI_MakeFace(bSplineSurface, wire);
+    BRepBuilderAPI_MakeFace faceMaker = BRepBuilderAPI_MakeFace(bSplineSurface, newWire);
     const TopoDS_Face newFace = faceMaker.Face();
 
     // Update newEdge with pCurve information
     BRep_Builder bRepBuilder = BRep_Builder();
     bRepBuilder.UpdateEdge(newEdge, pCurve, newFace, 1.0e-4);
 
-    Handle(Geom2d_Curve) newCurve = BRep_Tool::CurveOnSurface(newEdge, newFace, firstParam, lastParam);
-    if (!newCurve){
-        throw runtime_error("Could not compute pCurve");
-    }
-
-    
-    // Query the new pCurve
-    gp_XY pt = newCurve->Value(firstParam).Coord();
-    printf("curve_value = (%f, %f)\n", pt.Coord(1), pt.Coord(2));
+    // Dump to JSON
+    json::object obj;
+    obj = dumpFaceToJson(newFace);
+    string s = json::serialize(obj);
+    ofstream outfile("_surface.json");
+    outfile << s << endl;
 
     return 0;
 }

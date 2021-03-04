@@ -40,7 +40,7 @@ if(${GP_PNT_HEADER_LOCATION} STREQUAL "GP_PNT_HEADER_LOCATION-NOTFOUND")
     message(FATAL_ERROR "gp_Pnt.hxx not be found.")
 endif()
 
-find_package(Boost REQUIRED COMPONENTS program_options)
+find_package(Boost REQUIRED COMPONENTS program_options json log)
 if(Boost_FOUND)
   message(STATUS "Boost version found: " ${Boost_MAJOR_VERSION} "." ${Boost_MINOR_VERSION})
   include_directories(${Boost_INCLUDE_DIRS})
