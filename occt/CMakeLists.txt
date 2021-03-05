@@ -12,6 +12,7 @@ message(STATUS " ${CMAKE_CXX_FLAGS}")
 set(BUILD_SHARED_LIBS ON)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 
+#set(CMAKE_EXE_LINKER_FLAGS "-static")
 add_executable(${PROJECT_NAME} src/main.cpp)
 
 ################################
@@ -58,6 +59,6 @@ target_link_libraries(${PROJECT_NAME} TKBinXCAF TKIGES TKRWMesh TKSTEP TKSTEP209
                                TKXmlXCAF)
 
 target_link_libraries(${PROJECT_NAME} TKCDF TKLCAF TKCAF TKBinL TKXmlL TKBin TKXml TKStdL
-                       TKStd TKTObj TKBinTObj TKXmlTObj TKVCAF)                              
+                       TKStd TKTObj TKBinTObj TKXmlTObj TKVCAF)
 
                   

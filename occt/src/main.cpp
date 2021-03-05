@@ -27,6 +27,7 @@
 #include<boost/json.hpp>
 
 using namespace std;
+namespace po = boost::program_options;
 namespace json = boost::json;
 typedef map<string, vector<double>> UVgrid;
 
@@ -34,7 +35,6 @@ typedef map<string, vector<double>> UVgrid;
  * Parse commandline options
  */
 bool processArgs(int argc, const char *argv[], string& stepFilePath){
-    namespace po = boost::program_options;
 
     try {
         po::options_description desc("Program Usage");
@@ -88,6 +88,7 @@ Handle(Geom_BSplineCurve) computeCompositeCurveFromWire(const TopoDS_Wire& wire)
         TopoDS_Edge edge = TopoDS_Edge(wireExplorer.Current());
 
         if (BRep_Tool::Degenerated(edge)){
+            wireExplorer.Next();
             continue;
         }
 
@@ -259,25 +260,25 @@ int main(int argc, const char *argv[]){
         ostringstream buf;
         buf << "FACE_" << i;
         faceId = buf.str();
-
-        if (i != 22){
-            i++;
-            shapeEx.Next();
-            continue;
-        }
+//        if (i != 74){
+//            i++;
+//            shapeEx.Next();
+//            continue;
+//        }
+        printf("processing face %s\n", faceId.c_str());
         TopoDS_Face face = TopoDS::Face(shapeEx.Current());
         TopoDS_Face newFace = makeNewFaceWithSingleEdgeWires(face);
 
         // Dump to JSON
         json::object obj;
-        obj = dumpFaceToJson(faceId, newFace);
+        obj = dumpFaceToJson("FACE", newFace);
         string s = json::serialize(obj);
-        ofstream outfile("_surface.json");
-        outfile << s << endl;
+//        ofstream outfile("_surface.json");
+//        outfile << s << endl;
 
         i++;
         shapeEx.Next();
     }
-    
+
     return 0;
 }
