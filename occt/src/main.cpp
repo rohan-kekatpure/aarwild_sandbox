@@ -23,6 +23,7 @@
 #include<GeomConvert_CompCurveToBSplineCurve.hxx>
 #include<BRepTools_WireExplorer.hxx>
 #include<BRepBuilderAPI_MakeWire.hxx>
+#include <BRepClass_FaceClassifier.hxx>
 #include<boost/program_options.hpp>
 #include<boost/json.hpp>
 
@@ -136,36 +137,6 @@ UVgrid discretizeWire(const TopoDS_Wire& wire, const TopoDS_Face& face){
     return ret;
 }
 
-json::object dumpFaceToJson(const string& faceId, const TopoDS_Face& face) {
-    Handle(Geom_Surface) bSplineSurface = BRep_Tool::Surface(face);
-    double u1, u2, v1, v2;
-    bSplineSurface->Bounds(u1, u2, v1, v2);
-
-    // Explore Face
-    TopExp_Explorer faceEx = TopExp_Explorer(face, TopAbs_WIRE);
-    vector<UVgrid> innerWires;
-    UVgrid outerWire = {};
-    while (faceEx.More()) {
-        TopoDS_Wire wire = TopoDS::Wire(faceEx.Current());
-        map<string, vector<double>> wm = discretizeWire(wire, face);
-
-        if (BRepTools::OuterWire(face) == wire) {
-            outerWire = wm;
-        } else {
-            innerWires.push_back(wm);
-        }
-        faceEx.Next();
-    }
-    json::object obj;
-    obj[faceId] = {
-            {"surface_bounds", {{"u1", u1}, {"u2", u2}, {"v1", v1}, {"v2", v2}}},
-            {"inner_pcurves", innerWires},
-            {"outer_pcurve", outerWire}
-    };
-
-    return obj;
-}
-
 TopoDS_Wire makeSingleEdgeWireForSurface(const TopoDS_Wire& wire, const Handle(Geom_Surface)& bSplineSurface) {
     // Make composite edge out of the outer wire
     Handle(Geom_Curve) compositeCurve = computeCompositeCurveFromWire(wire);
@@ -228,6 +199,37 @@ TopoDS_Face makeNewFaceWithSingleEdgeWires(const TopoDS_Face& face) {
     return faceMaker.Face();
 }
 
+void generateInternalPointsForFace(const TopoDS_Face& face) {
+
+}
+
+void dumpFaceToJson(const string& faceId, const TopoDS_Face& face, json::object& obj) {
+    Handle(Geom_Surface) bSplineSurface = BRep_Tool::Surface(face);
+    double u1, u2, v1, v2;
+    bSplineSurface->Bounds(u1, u2, v1, v2);
+
+    // Explore Face
+    TopExp_Explorer faceEx = TopExp_Explorer(face, TopAbs_WIRE);
+    vector<UVgrid> innerWires;
+    UVgrid outerWire = {};
+    while (faceEx.More()) {
+        TopoDS_Wire wire = TopoDS::Wire(faceEx.Current());
+        map<string, vector<double>> wm = discretizeWire(wire, face);
+
+        if (BRepTools::OuterWire(face) == wire) {
+            outerWire = wm;
+        } else {
+            innerWires.push_back(wm);
+        }
+        faceEx.Next();
+    }
+    obj[faceId] = {
+            {"surface_bounds", {{"u1", u1}, {"u2", u2}, {"v1", v1}, {"v2", v2}}},
+            {"inner_pcurves", innerWires},
+            {"outer_pcurve", outerWire}
+    };
+}
+
 int main(int argc, const char *argv[]){
 
     // Process commandline arguments
@@ -256,29 +258,75 @@ int main(int argc, const char *argv[]){
     TopExp_Explorer shapeEx = TopExp_Explorer(shape, TopAbs_FACE);
     int i = 0;
     string faceId;
+
+    // Initialize object for jsonification
+    json::object obj;
+
     while (shapeEx.More()){
         ostringstream buf;
         buf << "FACE_" << i;
         faceId = buf.str();
-//        if (i != 74){
-//            i++;
-//            shapeEx.Next();
-//            continue;
-//        }
+
+        if (i != 52){
+            i++;
+            shapeEx.Next();
+            continue;
+        }
+
+        const TopoDS_Face face = TopoDS::Face(shapeEx.Current());
+        Handle(Geom_BSplineSurface) bsplineSurface = getBSplineSurfaceFromFace(face);
+        double u1, u2, v1, v2;
+        bsplineSurface->Bounds(u1, u2, v1, v2);
+        int numPtsU = 100, numPtsV = 100;
+        double du = (u2 - u1) / (float)numPtsU;
+        double dv = (v2 - v1) / (float)numPtsV;
+        double u = u1;
+        double v;
+        for (int iu = 0; iu < numPtsU; iu++) {
+            v = v1;
+            for (int iv = 0; iv < numPtsV; iv++) {
+                gp_Pnt2d pnt = gp_Pnt2d(u, v);
+//                gp_Pnt pnt = bsplineSurface->Value(u, v);
+                BRepClass_FaceClassifier fc = BRepClass_FaceClassifier();
+                fc.Perform(face, pnt, 1.0e-3);
+                TopAbs_State state = fc.State();
+                string stateStr;
+                switch (state) {
+                    case TopAbs_IN:
+                        stateStr = "IN";
+                        break;
+                    case TopAbs_OUT:
+                        stateStr = "OUT";
+                        break;
+                    case TopAbs_ON:
+                        stateStr = "ON";
+                        break;
+                    case TopAbs_UNKNOWN:
+                        stateStr = "UNKNOWN";
+                        break;
+                    default:
+                        stateStr = "<ERROR>";
+                }
+
+                printf("%lf,%lf,%s\n", u, v, stateStr.c_str());
+                v += dv;
+            }
+            u += du;
+        }
+        return 1;
         printf("processing face %s\n", faceId.c_str());
-        TopoDS_Face face = TopoDS::Face(shapeEx.Current());
         TopoDS_Face newFace = makeNewFaceWithSingleEdgeWires(face);
 
         // Dump to JSON
-        json::object obj;
-        obj = dumpFaceToJson("FACE", newFace);
-        string s = json::serialize(obj);
-//        ofstream outfile("_surface.json");
-//        outfile << s << endl;
+        dumpFaceToJson(faceId, newFace, obj);
 
         i++;
         shapeEx.Next();
     }
+
+    string s = json::serialize(obj);
+    ofstream outfile("_surfaces.json");
+    outfile << s << endl;
 
     return 0;
 }
