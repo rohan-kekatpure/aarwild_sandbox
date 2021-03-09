@@ -1,7 +1,7 @@
 import matplotlib.pyplot as pl
 import numpy as np
 
-with open('FACE22.csv') as f:
+with open('FACE218.csv') as f:
     lines = f.read().splitlines()
 
 vals = []
