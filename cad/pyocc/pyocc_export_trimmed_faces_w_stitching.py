@@ -50,7 +50,7 @@ class Mesh:
     edges: List[List]
     faces: List[Tuple]
     vertices: List[Tuple]
-    uv: Optional[List[List]]
+    param_grid: Optional[List[List]]
     is_outer_wire: bool = False
 
     def to_dict(self) -> Dict:
@@ -61,7 +61,7 @@ class Mesh:
             'edges': self.edges,
             'faces': self.faces,
             'is_outer_wire': self.is_outer_wire,
-            'param_grid': self.uv
+            'param_grid': self.param_grid
         }
 
 def _convert_to_nurbs(face: Any) -> Any:
@@ -106,10 +106,10 @@ def _classify_points(UVgrid, face):
 def _classify_faces(faces: np.ndarray, is_point_on_face: np.ndarray) -> np.ndarray:
     # Partition faces into interior and exterior
     n_faces = faces.shape[0]
-    is_interior_face = np.zeros((n_faces,), dtype=bool)
+    is_interior_face = np.ones((n_faces,), dtype=bool)
     for i, face in enumerate(faces):
-        if all(is_point_on_face[np.array(face)]):
-            is_interior_face[i] = True
+        if not any(is_point_on_face[np.array(face)]):
+            is_interior_face[i] = False
     return is_interior_face
 
 def _mesh_from_spline_surface(name: str, face: NURBSObject) -> Mesh:
@@ -119,7 +119,7 @@ def _mesh_from_spline_surface(name: str, face: NURBSObject) -> Mesh:
     URES, VRES = bspline_sirface.Resolution(tol)
     NU = int((U2 - U1) / URES)
     NV = int((V2 - V1) / VRES)
-    NU = NV = 50
+    NU = NV = 64
     Ulist = np.linspace(U1, U2, NU)
     Vlist = np.linspace(V1, V2, NV)
     Ugrid, Vgrid = np.meshgrid(Ulist, Vlist)
@@ -127,18 +127,31 @@ def _mesh_from_spline_surface(name: str, face: NURBSObject) -> Mesh:
     n_pts = UVgrid.shape[0]
     all_mesh_faces = _compute_faces_from_verts(NU, NV)
 
-    # Filter points not on Face
-    included_points = _classify_points(UVgrid, face)
+    # Compute points strictly in the interior of wires
+    interior_pts = _classify_points(UVgrid, face)
 
-    # Filter mesh faces where any of its vertex is trimmed away
-    included_mesh_faces = _classify_faces(all_mesh_faces, included_points)
+    # Discard faces whose _all_ points are exterior
+    interior_faces = _classify_faces(all_mesh_faces, interior_pts)
+
+    # Create points that have interior neighbors
+    face_pts_idx = np.unique(all_mesh_faces[interior_faces].ravel())
+    interior_pts_and_neighbors_idx = face_pts_idx
+    interior_pts_and_neighbors = interior_pts.copy()
+    interior_pts_and_neighbors[interior_pts_and_neighbors_idx] = True
+    interior_pts = interior_pts_and_neighbors.copy()
 
     # Recompute vertex numbers and update faces with these new vertex indices
-    included_points_idx = np.where(included_points)[0]
+    included_points_idx = np.where(interior_pts)[0]
     vertex_index_map = VM = dict(zip(included_points_idx, range(n_pts)))
-    interior_faces = all_mesh_faces[included_mesh_faces]
-    mesh_vert_UV = UVgrid[included_points]  # Mesh vertices in UV space
+    interior_faces = all_mesh_faces[interior_faces]
+    mesh_vert_UV = UVgrid[interior_pts]  # Mesh vertices in UV space
     mesh_faces = [(VM[i1], VM[i2], VM[i3], VM[i4]) for i1, i2, i3, i4 in interior_faces]
+
+    # TODO: Change to filtered versions
+    ### modification start
+    mesh_vert_UV = UVgrid
+    mesh_faces = all_mesh_faces.tolist()
+    ### modification end
 
     n_verts = included_points_idx.shape[0]
     XYZgrid = np.zeros((n_verts, 3))
@@ -240,12 +253,14 @@ def main():
     meshes_list = []
 
     for i, face in enumerate(shape_faces):
-        if i != 22: continue
         print(f'Processing faces {i}/{n_faces}')
+        if i != 74: continue
+
         face_id = f'_FACE_{i:06d}'
-        # Compute raw mesh from NURBS params
-        surface_mesh = _mesh_from_spline_surface(face_id, face)
-        meshes_list.append(surface_mesh.to_dict())
+
+        # Compute meshes for face
+        mesh_surface = _mesh_from_spline_surface(face_id, face)
+        meshes_list.append(mesh_surface.to_dict())
 
         # Compute meshes for face boundaries
         facex = TopologyExplorer(face)
@@ -256,6 +271,7 @@ def main():
             meshes_list.append(mesh_boundary.to_dict())
 
     # Write meshes to disk
+    # from IPython import embed; embed(); exit(0)
     with Path('_meshes.json').open('w') as f:
         json.dump(meshes_list, f, indent=2)
 

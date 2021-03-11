@@ -293,8 +293,7 @@ def main():
     for i, face in enumerate(shape_faces):
         print(f'Processing faces {i}/{n_faces}')
         face_id = f'_FACE_{i:06d}'
-        if i != 22:
-            continue
+        if i != 74: continue
         surface = BRepAdaptor_Surface(face)
         surface_type = surface.GetType()
 
@@ -331,7 +330,8 @@ def main():
             meshes_list.append(wire_mesh.to_dict())
 
         is_interior_vert = _trim(surface_spline, surface_mesh, inner_wire_splines, outer_wire_splines)
-        new_surface_mesh = _recompute_mesh(face_id, surface_mesh, is_interior_vert)
+        # new_surface_mesh = _recompute_mesh(face_id, surface_mesh, is_interior_vert)
+        new_surface_mesh = surface_mesh
         meshes_list.append(new_surface_mesh.to_dict())
 
     # Write meshes to disk
