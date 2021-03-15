@@ -1,11 +1,11 @@
 import matplotlib.pyplot as pl
 import numpy as np
 
-with open('FACE218.csv') as f:
+with open('FACE22.csv') as f:
     lines = f.read().splitlines()
 
 vals = []
-for l in lines:
+for l in lines[1:]:
     u, v, state = l.split(',')
     u = float(u)
     v = float(v)

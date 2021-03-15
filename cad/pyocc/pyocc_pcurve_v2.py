@@ -17,7 +17,7 @@ from OCC.Core.GeomConvert import GeomConvert_CompCurveToBSplineCurve, geomconver
 from OCC.Core.IFSelect import IFSelect_RetDone, IFSelect_ItemsByEntity
 from OCC.Core.STEPControl import STEPControl_Reader
 from OCC.Core.TopoDS import topods_Face, TopoDS_Wire, topods_Edge, topods_Wire, TopoDS_Face, TopoDS_Edge
-from OCC.Core.gp import gp_Pnt, gp_Vec
+from OCC.Core.gp import gp_Pnt, gp_Vec, gp_OX2d
 from OCC.Extend.TopologyUtils import TopologyExplorer, WireExplorer
 from OCC.Core.GeomAPI import GeomAPI_ProjectPointOnCurve
 from OCC.Core.Geom import Geom_Curve
@@ -26,10 +26,11 @@ from OCC.Core.TopAbs import TopAbs_Orientation
 from OCC.Core.BOPTools import BOPTools_AlgoTools2D_BuildPCurveForEdgeOnFace
 from OCC.Core.TopTools import TopTools_ListOfShape
 from OCC.Core.TopExp import topexp
-from OCC.Core.Geom2d import Geom2d_Curve
-
+from OCC.Core.Geom2d import Geom2d_Curve, Geom2d_Circle
 from OCC.Core.ShapeConstruct import ShapeConstruct_ProjectCurveOnSurface
 from OCC.Core.GeomProjLib import geomprojlib
+from OCC.Core.Adaptor2d import Adaptor2d_Curve2d,  Adaptor2d_HCurve2d
+from OCC.Core.Geom2dAdaptor import geom2dadaptor_MakeCurve, Geom2dAdaptor_Curve
 
 NURBSObject = NewType('NURBSObject', Any)
 
@@ -125,8 +126,6 @@ def main():
         # Initialize structure to hold surface information
         surface_info = {'surface_bounds': [], 'edges': []}
 
-        if i != 22:
-            continue
         brep_surface = BRepAdaptor_Surface(face)
         surface = BRep_Tool.Surface(face)
         surface_type = brep_surface.GetType()
@@ -156,14 +155,18 @@ def main():
 
         # continue
         # Handle wires
-        from IPython import embed; embed(); exit(0)
         composite_edge = _get_composite_edge_from_wire(wires[0])
         composite_edge_curve, _, _ = BRep_Tool.Curve(composite_edge)
         pcurve_maker = ShapeConstruct_ProjectCurveOnSurface()
         pcurve_maker.Init(surface_spline, 1.0e-4)
         first, last = -1., -1.
-        projected_curve = geomprojlib.Project(composite_edge_curve, surface)
-        pcurve_maker.Perform(composite_edge_curve, first, last, )
+        circle = Geom2d_Circle(gp_OX2d(), 1, True)
+        h = Geom2dAdaptor_Curve(circle)
+        from IPython import embed; embed(); exit(0)
+        pcurve_maker.Perform(composite_edge_curve, first, last, h.Curve())
+        pcurve_maker.PerformByProjLib(composite_edge_curve, first, last, h.Curve())
+        print('here')
+        # projected_curve = geomprojlib.Project(composite_edge_curve, surface)
 
     with Path('_surfaces.json').open('w') as f:
         json.dump(surfaces, f, indent=2)

@@ -267,7 +267,7 @@ int main(int argc, const char *argv[]){
         buf << "FACE_" << i;
         faceId = buf.str();
 
-        if (i != 218){
+        if (i != 74){
             i++;
             shapeEx.Next();
             continue;
